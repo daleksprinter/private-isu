@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
@@ -176,28 +177,71 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 	var posts []Post
 
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
+		err := db.Get(&p.CommentCount, "SELECT COUNT(1) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
 		if err != nil {
 			return nil, err
 		}
 
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+		type CommentWithUser struct {
+			ID            int       `db:"id"`
+			PostID        int       `db:"post_id"`
+			UserID        int       `db:"user_id"`
+			Comment       string    `db:"comment"`
+			CreatedAt     time.Time `db:"created_at"`
+			AccountName   string    `db:"account_name"`
+			Passhash      string    `db:"passhash"`
+			Authority     int       `db:"authority"`
+			DelFlg        int       `db:"del_flg"`
+			UserCreatedAt time.Time `db:"user_created_at"`
+		}
+
+		query := "SELECT c.*, u.account_name, u.passhash, u.authority, u.del_flg, u.created_at user_created_at FROM `comments` c join users u on c.user_id = u.id WHERE `post_id` = ? ORDER BY `created_at` DESC"
 		if !allComments {
 			query += " LIMIT 3"
 		}
-		var comments []Comment
-		err = db.Select(&comments, query, p.ID)
+		var commentswithuser []CommentWithUser
+		err = db.Select(&commentswithuser, query, p.ID)
 		if err != nil {
 			return nil, err
 		}
 
-		for i := 0; i < len(comments); i++ {
-			err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
-			if err != nil {
-				return nil, err
-			}
+		var comments []Comment
+		for c := range commentswithuser {
+			comments = append(comments, Comment{
+				ID:        commentswithuser[c].ID,
+				PostID:    commentswithuser[c].PostID,
+				UserID:    commentswithuser[c].UserID,
+				Comment:   commentswithuser[c].Comment,
+				CreatedAt: commentswithuser[c].CreatedAt,
+				User: User{
+					ID:          commentswithuser[c].UserID,
+					AccountName: commentswithuser[c].AccountName,
+					Passhash:    commentswithuser[c].Passhash,
+					Authority:   commentswithuser[c].Authority,
+					DelFlg:      commentswithuser[c].DelFlg,
+					CreatedAt:   commentswithuser[c].UserCreatedAt,
+				},
+			})
 		}
 
+		/*
+			query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+					if !allComments {
+						query += " LIMIT 3"
+					}
+					var comments []Comment
+					err = db.Select(&comments, query, p.ID)
+					if err != nil {
+						return nil, err
+					}
+
+					for i := 0; i < len(comments); i++ {
+						err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
+						if err != nil {
+							return nil, err
+						}
+					}
+		*/
 		// reverse
 		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
 			comments[i], comments[j] = comments[j], comments[i]
@@ -205,16 +249,13 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 
 		p.Comments = comments
 
-		err = db.Get(&p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
-		if err != nil {
-			return nil, err
-		}
-
+		/*		err = db.Get(&p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
+				if err != nil {
+					return nil, err
+				}*/
 		p.CSRFToken = csrfToken
+		posts = append(posts, p)
 
-		if p.User.DelFlg == 0 {
-			posts = append(posts, p)
-		}
 		if len(posts) >= postsPerPage {
 			break
 		}
@@ -385,15 +426,47 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
-	results := []Post{}
-
-	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC")
+	type PostWithUser struct {
+		ID            int       `db:"id"`
+		UserID        int       `db:"user_id"`
+		Body          string    `db:"body"`
+		Mime          string    `db:"mime"`
+		CreatedAt     time.Time `db:"created_at"`
+		AccountName   string    `db:"account_name"`
+		Passhash      string    `db:"passhash"`
+		Authority     int       `db:"authority"`
+		DelFlg        int       `db:"del_flg"`
+		UserCreatedAt time.Time `db:"user_created_at"`
+	}
+	postswithuser := []PostWithUser{}
+	query := "SELECT p.id, p.user_id, p.body, p.mime, p.created_at, u.account_name, u.passhash, u.authority, u.del_flg, u.created_at user_created_at FROM `posts` p join users u on p.user_id = u.id where u.del_flg = 0 ORDER BY `p`.`created_at` DESC"
+	err := db.Select(&postswithuser, query)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
+	results := []Post{}
+	for p := range postswithuser {
+		results = append(results, Post{
+			ID:        postswithuser[p].ID,
+			UserID:    postswithuser[p].UserID,
+			Body:      postswithuser[p].Body,
+			Mime:      postswithuser[p].Mime,
+			CreatedAt: postswithuser[p].CreatedAt,
+			User: User{
+				ID:          postswithuser[p].UserID,
+				AccountName: postswithuser[p].AccountName,
+				Passhash:    postswithuser[p].Passhash,
+				Authority:   postswithuser[p].Authority,
+				DelFlg:      postswithuser[p].DelFlg,
+				CreatedAt:   postswithuser[p].UserCreatedAt,
+			},
+		})
+	}
+
+	csrfToken := getCSRFToken(r)
+	posts, err := makePosts(results, csrfToken, false)
 	if err != nil {
 		log.Print(err)
 		return
@@ -413,7 +486,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		Me        User
 		CSRFToken string
 		Flash     string
-	}{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
+	}{posts, me, csrfToken, getFlash(w, r, "notice")})
 }
 
 func getAccountName(w http.ResponseWriter, r *http.Request) {
@@ -654,7 +727,7 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		query,
 		me.ID,
 		mime,
-		filedata,
+		"",
 		r.FormValue("body"),
 	)
 	if err != nil {
@@ -666,6 +739,20 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Print(err)
 		return
+	}
+
+	ext := ""
+	if strings.Contains(mime, "jpeg") {
+		ext = "jpg"
+	} else if strings.Contains(mime, "png") {
+		ext = "png"
+	} else if strings.Contains(mime, "gif") {
+		ext = "gif"
+	}
+	filename := fmt.Sprintf("/home/public/image/%d.%s", pid, ext)
+	err = ioutil.WriteFile(filename, filedata, 0644)
+	if err != nil {
+		log.Fatalf("Failed writing to file: %s", err)
 	}
 
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
@@ -846,7 +933,7 @@ func main() {
 	r.Get("/posts", getPosts)
 	r.Get("/posts/{id}", getPostsID)
 	r.Post("/", postIndex)
-	r.Get("/image/{id}.{ext}", getImage)
+	//r.Get("/image/{id}.{ext}", getImage)
 	r.Post("/comment", postComment)
 	r.Get("/admin/banned", getAdminBanned)
 	r.Post("/admin/banned", postAdminBanned)
