@@ -194,7 +194,7 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 			UserCreatedAt time.Time `db:"user_created_at"`
 		}
 
-		query := "SELECT c.*, u.account_name, u.passhash, u.authority, u.del_flg, u.created_at user_created_at FROM `comments` c join user u on c.user_id = u.id WHERE `post_id` = ? ORDER BY `created_at` DESC"
+		query := "SELECT c.*, u.account_name, u.passhash, u.authority, u.del_flg, u.created_at user_created_at FROM `comments` c join users u on c.user_id = u.id WHERE `post_id` = ? ORDER BY `created_at` DESC"
 		if !allComments {
 			query += " LIMIT 3"
 		}
