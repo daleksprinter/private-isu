@@ -176,28 +176,71 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
 	var posts []Post
 
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
+		err := db.Get(&p.CommentCount, "SELECT COUNT(1) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
 		if err != nil {
 			return nil, err
 		}
 
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+		type CommentWithUser struct {
+			ID            int       `db:"id"`
+			PostID        int       `db:"post_id"`
+			UserID        int       `db:"user_id"`
+			Comment       string    `db:"comment"`
+			CreatedAt     time.Time `db:"created_at"`
+			AccountName   string    `db:"account_name"`
+			Passhash      string    `db:"passhash"`
+			Authority     int       `db:"authority"`
+			DelFlg        int       `db:"del_flg"`
+			UserCreatedAt time.Time `db:"user_created_at"`
+		}
+
+		query := "SELECT c.*, u.account_name, u.passhash, u.authority, u.del_flg, u.created_at user_created_at FROM `comments` c join user u on c.user_id = u.id WHERE `post_id` = ? ORDER BY `created_at` DESC"
 		if !allComments {
 			query += " LIMIT 3"
 		}
-		var comments []Comment
-		err = db.Select(&comments, query, p.ID)
+		var commentswithuser []CommentWithUser
+		err = db.Select(&commentswithuser, query, p.ID)
 		if err != nil {
 			return nil, err
 		}
 
-		for i := 0; i < len(comments); i++ {
-			err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
-			if err != nil {
-				return nil, err
-			}
+		var comments []Comment
+		for c := range commentswithuser {
+			comments = append(comments, Comment{
+				ID:        commentswithuser[c].ID,
+				PostID:    commentswithuser[c].PostID,
+				UserID:    commentswithuser[c].UserID,
+				Comment:   commentswithuser[c].Comment,
+				CreatedAt: commentswithuser[c].CreatedAt,
+				User: User{
+					ID:          commentswithuser[c].UserID,
+					AccountName: commentswithuser[c].AccountName,
+					Passhash:    commentswithuser[c].Passhash,
+					Authority:   commentswithuser[c].Authority,
+					DelFlg:      commentswithuser[c].DelFlg,
+					CreatedAt:   commentswithuser[c].UserCreatedAt,
+				},
+			})
 		}
 
+		/*
+			query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+					if !allComments {
+						query += " LIMIT 3"
+					}
+					var comments []Comment
+					err = db.Select(&comments, query, p.ID)
+					if err != nil {
+						return nil, err
+					}
+
+					for i := 0; i < len(comments); i++ {
+						err := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
+						if err != nil {
+							return nil, err
+						}
+					}
+		*/
 		// reverse
 		for i, j := 0, len(comments)-1; i < j; i, j = i+1, j-1 {
 			comments[i], comments[j] = comments[j], comments[i]
